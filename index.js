@@ -13,32 +13,21 @@ const cache = new Map();
 
 // ==================== FUNÇÕES UTILITÁRIAS ====================
 
-// Função para extrair informações detalhadas da chave NF-e
+// Função para extrair informações da chave NF-e
 function extrairInformacoesChaveNF(chaveAcesso) {
   if (!chaveAcesso || chaveAcesso.length !== 44) {
     return null;
   }
   
   try {
-    // Extrair todas as informações da chave
     const uf = chaveAcesso.substring(0, 2);
     const ano = chaveAcesso.substring(2, 4);
     const mes = chaveAcesso.substring(4, 6);
-    const cnpj = chaveAcesso.substring(6, 20);
     const modelo = chaveAcesso.substring(20, 22);
     const serie = chaveAcesso.substring(22, 25);
     const numeroNFcompleto = chaveAcesso.substring(25, 34);
-    const tipoEmissao = chaveAcesso.substring(34, 35);
-    const codigoNumerico = chaveAcesso.substring(35, 43);
-    const dv = chaveAcesso.substring(43, 44);
-    
-    // Número da NF sem zeros à esquerda
     const numeroNF = parseInt(numeroNFcompleto).toString();
     
-    // Formatar CNPJ
-    const cnpjFormatado = cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, "$1.$2.$3/$4-$5");
-    
-    // Mapear UF
     const ufMap = {
       '42': 'SC - Santa Catarina',
       '35': 'SP - São Paulo',
@@ -55,18 +44,9 @@ function extrairInformacoesChaveNF(chaveAcesso) {
       serie: serie,
       formato: `${serie}/${numeroNF}`,
       chave_acesso: chaveAcesso,
-      uf: uf,
       uf_completo: ufMap[uf] || `UF ${uf}`,
-      ano: `20${ano}`,
-      mes: mes,
       ano_mes: `20${ano}/${mes}`,
-      cnpj: cnpj,
-      cnpj_formatado: cnpjFormatado,
-      modelo: modelo,
-      modelo_descricao: modelo === '55' ? 'NF-e' : modelo === '65' ? 'NFC-e' : `Modelo ${modelo}`,
-      tipo_emissao: tipoEmissao,
-      codigo_numerico: codigoNumerico,
-      dv: dv
+      modelo_descricao: modelo === '55' ? 'NF-e' : `Modelo ${modelo}`
     };
   } catch (error) {
     console.error("Erro ao extrair informações da chave:", error);
@@ -74,32 +54,16 @@ function extrairInformacoesChaveNF(chaveAcesso) {
   }
 }
 
-// Função simplificada para extrair apenas número da NF
-function extrairNumeroNFdaChave(chaveAcesso) {
-  const info = extrairInformacoesChaveNF(chaveAcesso);
-  if (!info) return null;
-  
-  return {
-    numero: info.numero,
-    serie: info.serie,
-    numero_completo: info.numero_completo,
-    chave_acesso: info.chave_acesso,
-    formato: info.formato,
-    numero_formatado: info.numero_formatado
-  };
-}
-
-// Função para formatar número da NF no padrão brasileiro
+// Função para formatar número da NF
 function formatarNumeroNF(numero) {
   if (!numero) return "";
-  
   const numStr = numero.toString().padStart(9, '0');
   return numStr.replace(/(\d{3})(\d{3})(\d{3})/, '$1.$2.$3');
 }
 
 // ==================== FUNÇÕES API MAGENTO ====================
 
-// Função ATUALIZADA para buscar notas fiscais - USA O RASTREAMENTO COMO CHAVE!
+// Função para buscar notas fiscais - USA O RASTREAMENTO COMO CHAVE!
 async function buscarNotaFiscal(orderId) {
   try {
     const url = `https://loja.mueller.ind.br/rest/V1/invoices?searchCriteria[filter_groups][0][filters][0][field]=order_id&searchCriteria[filter_groups][0][filters][0][value]=${orderId}`;
@@ -110,21 +74,18 @@ async function buscarNotaFiscal(orderId) {
 
     if (response.data.items && response.data.items.length > 0) {
       const invoice = response.data.items[0];
-      
-      // NÚMERO INTERNO DO SISTEMA
       const numeroInterno = invoice.increment_id;
       
-      // PRIMEIRO: Buscar o rastreamento para pegar a CHAVE
+      // Buscar o rastreamento para pegar a CHAVE (que está no código de rastreamento!)
       const rastreamento = await buscarRastreamento(orderId);
       
       let chaveAcesso = null;
       let numeroNFReal = null;
       
-      // SEÇÃO CRÍTICA: A chave está no código de rastreamento!
+      // O "código de rastreamento" é na verdade a CHAVE DA NF!
       if (rastreamento && rastreamento.numero_rastreamento && rastreamento.numero_rastreamento.length === 44) {
-        // O "código de rastreamento" é na verdade a CHAVE DA NF!
         chaveAcesso = rastreamento.numero_rastreamento;
-        numeroNFReal = extrairNumeroNFdaChave(chaveAcesso);
+        numeroNFReal = extrairInformacoesChaveNF(chaveAcesso);
       }
       
       // Se não encontrou no rastreamento, tenta na invoice
@@ -135,27 +96,18 @@ async function buscarNotaFiscal(orderId) {
         else if (extAttrs.nfeChave) chaveAcesso = extAttrs.nfeChave;
         
         if (chaveAcesso) {
-          numeroNFReal = extrairNumeroNFdaChave(chaveAcesso);
+          numeroNFReal = extrairInformacoesChaveNF(chaveAcesso);
         }
       }
       
       return {
-        // Número interno do sistema (invoice)
         numero_interno: numeroInterno,
-        // Número real da NF (extraído da chave no rastreamento)
         numero_real: numeroNFReal ? numeroNFReal.numero : null,
         serie: numeroNFReal ? numeroNFReal.serie : null,
         formato_completo: numeroNFReal ? numeroNFReal.formato : null,
         numero_formatado: numeroNFReal ? numeroNFReal.numero_formatado : null,
         chave_acesso: chaveAcesso,
-        emitida_em: invoice.created_at,
-        // Informações adicionais se tivermos a chave
-        ...(chaveAcesso ? {
-          modelo: chaveAcesso.substring(20, 22),
-          cnpj_emitente: chaveAcesso.substring(6, 20),
-          uf: chaveAcesso.substring(0, 2),
-          ano_mes: chaveAcesso.substring(2, 6)
-        } : {})
+        emitida_em: invoice.created_at
       };
     }
     return null;
@@ -193,49 +145,6 @@ async function buscarRastreamento(orderId) {
     return null;
   } catch (error) {
     console.error("Erro ao buscar rastreamento:", error.message);
-    return null;
-  }
-}
-
-// Função para buscar nota fiscal por número interno
-async function buscarNotaFiscalPorNumero(numeroNF) {
-  try {
-    const url = `https://loja.mueller.ind.br/rest/V1/invoices?searchCriteria[filter_groups][0][filters][0][field]=increment_id&searchCriteria[filter_groups][0][filters][0][value]=${numeroNF}`;
-    
-    const response = await axios.get(url, {
-      headers: { Authorization: `Bearer ${TOKEN}` }
-    });
-
-    if (response.data.items && response.data.items.length > 0) {
-      const invoice = response.data.items[0];
-      
-      let chaveAcesso = null;
-      let numeroNFReal = null;
-      
-      if (invoice.extension_attributes) {
-        const extAttrs = invoice.extension_attributes;
-        if (extAttrs.nfe_key) chaveAcesso = extAttrs.nfe_key;
-        else if (extAttrs.chave_acesso) chaveAcesso = extAttrs.chave_acesso;
-        else if (extAttrs.nfeChave) chaveAcesso = extAttrs.nfeChave;
-      }
-      
-      if (chaveAcesso) {
-        numeroNFReal = extrairNumeroNFdaChave(chaveAcesso);
-      }
-      
-      return {
-        numero_interno: invoice.increment_id,
-        numero_real: numeroNFReal ? numeroNFReal.numero : null,
-        serie: numeroNFReal ? numeroNFReal.serie : null,
-        formato_completo: numeroNFReal ? numeroNFReal.formato : null,
-        chave_acesso: chaveAcesso,
-        order_id: invoice.order_id,
-        emitida_em: invoice.created_at
-      };
-    }
-    return null;
-  } catch (error) {
-    console.error("Erro ao buscar nota fiscal por número:", error.message);
     return null;
   }
 }
@@ -427,49 +336,35 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             border-radius: 4px;
             margin-bottom: 15px;
         }
-        .nf-interna {
-            background-color: #f8f9fa;
-            border-left: 4px solid #6c757d;
-            padding: 8px;
-            border-radius: 4px;
-            font-size: 0.9rem;
-        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header text-center">
             <h1><i class="bi bi-search"></i> Consulta de Pedidos Mueller</h1>
-            <p class="lead">Sistema de consulta de pedidos por CPF, número do pedido ou NF</p>
+            <p class="lead">Sistema de consulta de pedidos por CPF ou número do pedido</p>
         </div>
 
         <div class="search-form">
             <h4><i class="bi bi-search"></i> Buscar Pedidos</h4>
             <form id="searchForm">
                 <div class="row g-3">
-                    <div class="col-md-4">
+                    <div class="col-md-6">
                         <label for="cpf" class="form-label">CPF (somente números)</label>
                         <div class="input-group">
                             <span class="input-group-text"><i class="bi bi-person-badge"></i></span>
                             <input type="text" class="form-control" id="cpf" placeholder="Digite o CPF">
                         </div>
                     </div>
-                    <div class="col-md-4">
+                    <div class="col-md-6">
                         <label for="pedido" class="form-label">Número do Pedido</label>
                         <div class="input-group">
                             <span class="input-group-text"><i class="bi bi-receipt"></i></span>
                             <input type="text" class="form-control" id="pedido" placeholder="Ex: 1000662958">
                         </div>
                     </div>
-                    <div class="col-md-4">
-                        <label for="nf" class="form-label">Número da NF</label>
-                        <div class="input-group">
-                            <span class="input-group-text"><i class="bi bi-file-text"></i></span>
-                            <input type="text" class="form-control" id="nf" placeholder="Ex: 1000566780">
-                        </div>
-                    </div>
                     <div class="col-12">
-                        <div class="form-text mb-3">Informe APENAS UM: CPF OU número do pedido OU número da NF</div>
+                        <div class="form-text mb-3">Informe o CPF OU o número do pedido</div>
                         <button type="submit" class="btn btn-primary">
                             <i class="bi bi-search"></i> Buscar Pedidos
                         </button>
@@ -552,17 +447,9 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             
             const cpf = document.getElementById('cpf').value.trim();
             const pedido = document.getElementById('pedido').value.trim();
-            const nf = document.getElementById('nf').value.trim();
             
-            const camposPreenchidos = [cpf, pedido, nf].filter(Boolean).length;
-            
-            if (camposPreenchidos === 0) {
-                showError('Informe o CPF, número do pedido ou número da NF');
-                return;
-            }
-            
-            if (camposPreenchidos > 1) {
-                showError('Informe apenas UM critério de busca por vez');
+            if (!cpf && !pedido) {
+                showError('Informe o CPF ou o número do pedido');
                 return;
             }
             
@@ -578,8 +465,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             try {
                 let queryParam = '';
                 if (cpf) queryParam = 'cpf=' + cpf;
-                else if (pedido) queryParam = 'pedido=' + pedido;
-                else if (nf) queryParam = 'nf=' + nf;
+                else queryParam = 'pedido=' + pedido;
                 
                 const response = await fetch('/api/pedidos?' + queryParam);
                 const data = await response.json();
@@ -604,7 +490,6 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
         document.getElementById('clearBtn').addEventListener('click', function() {
             document.getElementById('cpf').value = '';
             document.getElementById('pedido').value = '';
-            document.getElementById('nf').value = '';
             document.getElementById('results').innerHTML = '';
             hideError();
         });
@@ -734,75 +619,55 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             });
             html += '</div>';
             
-            // NOTA FISCAL - VERSÃO SUPER MELHORADA
+            // NOTA FISCAL SIMPLIFICADA
             if (pedido.nf) {
                 const nfInfo = pedido.nf.chave_acesso ? extrairInformacoesChaveNF(pedido.nf.chave_acesso) : null;
                 
                 html += '<div class="info-box">' +
-                        '<h6><i class="bi bi-receipt"></i> Nota Fiscal Eletrônica</h6>';
+                        '<h6><i class="bi bi-receipt"></i> Nota Fiscal</h6>';
                 
-                // 1. NÚMERO REAL DA NF (extraído da chave) - DESTAQUE
                 if (nfInfo) {
+                    // NÚMERO REAL DA NF
                     html += '<div class="nf-real">' +
-                            '<h5 class="mb-1"><strong>NF-e Real: ' + nfInfo.formato + '</strong></h5>' +
+                            '<h5 class="mb-1"><strong>NF-e: ' + nfInfo.formato + '</strong></h5>' +
                             '<p class="mb-0">Número: <strong>' + nfInfo.numero_formatado + '</strong> (' + nfInfo.numero + ')</p>' +
                             '</div>';
                     
-                    // 2. INFORMAÇÕES DA CHAVE
-                    html += '<div class="mb-3">' +
-                            '<strong>Informações da Chave:</strong><br>' +
-                            '<small>' + nfInfo.uf_completo + ' | Emissão: ' + nfInfo.ano_mes + ' | ' + nfInfo.modelo_descricao + '</small>' +
-                            '</div>';
-                    
-                    // 3. CHAVE FORMATADA
-                    html += '<div class="mb-3">' +
-                            '<strong>Chave de Acesso (44 dígitos):</strong>' +
-                            '<div class="chave-nfe mt-1">' + formatarChaveAcesso(nfInfo.chave_acesso) + '</div>' +
-                            '<button class="btn btn-sm btn-outline-primary copy-btn mt-1 me-2" ' +
-                            'onclick="copyToClipboard(\\'' + nfInfo.chave_acesso + '\\')" ' +
-                            'title="Copiar chave completa">' +
-                            '<i class="bi bi-clipboard"></i> Copiar Chave</button>' +
-                            
-                            '<button class="btn btn-sm btn-outline-success copy-btn mt-1" ' +
-                            'onclick="copyToClipboard(\\'' + nfInfo.numero + '\\')" ' +
-                            'title="Copiar apenas o número da NF">' +
-                            '<i class="bi bi-clipboard-check"></i> Copiar Número NF</button>' +
-                            '</div>';
-                    
-                    // 4. LINKS PARA CONSULTA
-                    html += '<div class="d-grid gap-2">' +
-                            '<a href="https://www.nfe.fazenda.gov.br/portal/consultaRecaptcha.aspx?tipoConsulta=resumo&tipoConteudo=Gb3PasosJ2k=" ' +
-                            'target="_blank" class="btn btn-primary">' +
-                            '<i class="bi bi-search"></i> Consultar NF-e no Portal da Fazenda</a>' +
-                            
-                            '<a href="https://www.sefaz.rs.gov.br/NFE/NFE-NFC.aspx?p=' + pedido.nf.chave_acesso + '&t=1" ' +
-                            'target="_blank" class="btn btn-outline-primary">' +
-                            '<i class="bi bi-qr-code"></i> Ver DANFE Online</a>' +
-                            '</div>';
+                    // CHAVE PARA COPIAR
+                    html += '<p class="mb-1"><strong>Chave de Acesso:</strong></p>' +
+                            '<div class="chave-nfe mb-2">' + formatarChaveAcesso(nfInfo.chave_acesso) + '</div>' +
+                            '<button class="btn btn-sm btn-outline-primary copy-btn" ' +
+                            'onclick="copyToClipboard(\\'' + nfInfo.chave_acesso + '\\')">' +
+                            '<i class="bi bi-clipboard"></i> Copiar Chave</button>';
+                } else {
+                    // FALLBACK: Número interno
+                    html += '<p class="mb-0"><strong>Documento:</strong> ' + pedido.nf.numero_interno + '</p>';
                 }
                 
-                // 5. NÚMERO INTERNO DO SISTEMA (para referência)
-                html += '<div class="nf-interna mt-3">' +
-                        '<i class="bi bi-info-circle"></i> ' +
-                        '<strong>Documento Interno do Sistema:</strong> ' + pedido.nf.numero_interno + ' | ' +
-                        '<strong>Emitida em:</strong> ' + formatDate(pedido.nf.emitida_em) +
-                        '</div>';
-                
+                html += '<p class="mb-0 mt-2"><small><strong>Emitida em:</strong> ' + formatDate(pedido.nf.emitida_em) + '</small></p>';
                 html += '</div>';
             }
             
-            // Rastreamento
-            if (pedido.rastreamento) {
+            // RASTREAMENTO COM LINK CLICÁVEL
+            if (pedido.rastreamento && pedido.rastreamento.numero_rastreamento) {
+                const chaveRastreamento = pedido.rastreamento.numero_rastreamento;
+                const linkRastreamento = 'http://www.transpofrete.com.br/default/rastreio/mercadoria/rastreio.xhtml?exibirDetalhes=true&chave=' + chaveRastreamento;
+                
                 html += '<div class="info-box">' +
                         '<h6><i class="bi bi-truck"></i> Rastreamento</h6>' +
-                        '<p class="mb-1"><strong>Código:</strong> ' + 
-                        '<span id="track-' + pedido.numero_pedido + '">' + pedido.rastreamento.numero_rastreamento + '</span>' +
-                        '<button class="btn btn-sm btn-outline-secondary copy-btn ms-2" onclick="copyToClipboard(\\'' + pedido.rastreamento.numero_rastreamento + '\\')" title="Copiar código"><i class="bi bi-clipboard"></i></button></p>' +
-                        '<p class="mb-1"><strong>Transportadora:</strong> ' + pedido.rastreamento.transportadora + '</p>';
-                if (pedido.rastreamento.link_rastreamento) {
-                    html += '<a href="' + pedido.rastreamento.link_rastreamento + '" target="_blank" class="btn btn-sm btn-primary"><i class="bi bi-box-arrow-up-right"></i> Acompanhar Entrega</a>';
-                }
-                html += '</div>';
+                        '<p class="mb-1"><strong>Código:</strong> ' + chaveRastreamento + '</p>' +
+                        '<p class="mb-2"><strong>Transportadora:</strong> ' + pedido.rastreamento.transportadora + '</p>' +
+                        
+                        // LINK CLICÁVEL PARA RASTREAR
+                        '<a href="' + linkRastreamento + '" target="_blank" class="btn btn-primary">' +
+                        '<i class="bi bi-box-arrow-up-right"></i> Acompanhar Entrega</a>' +
+                        
+                        // BOTÃO PARA COPIAR CÓDIGO
+                        '<button class="btn btn-outline-secondary ms-2 copy-btn" ' +
+                        'onclick="copyToClipboard(\\'' + chaveRastreamento + '\\')" ' +
+                        'title="Copiar código">' +
+                        '<i class="bi bi-clipboard"></i></button>' +
+                        '</div>';
             }
             
             html += '<div class="mt-3">' +
@@ -835,89 +700,55 @@ app.get("/", (req, res) => {
   res.send(HTML_TEMPLATE);
 });
 
-// Rota da API com suporte a CPF, Pedido e NF
+// Rota da API com suporte apenas a CPF e Pedido
 app.get("/api/pedidos", async (req, res) => {
   try {
-    const { cpf, pedido, nf } = req.query;
+    const { cpf, pedido } = req.query;
 
-    if (!cpf && !pedido && !nf) {
+    if (!cpf && !pedido) {
       return res.status(400).json({ 
-        erro: "Informe CPF, número do pedido ou número da NF" 
+        erro: "Informe CPF ou número do pedido" 
       });
     }
 
-    let pedidosCompletos = [];
+    const field = cpf ? "customer_taxvat" : "increment_id";
+    const value = cpf || pedido;
 
-    // CASO 1: Busca por CPF ou Pedido
-    if (cpf || pedido) {
-      const field = cpf ? "customer_taxvat" : "increment_id";
-      const value = cpf || pedido;
-
-      const cacheKey = `${field}:${value}`;
-      if (cache.has(cacheKey)) {
-        const cachedData = cache.get(cacheKey);
-        if (Date.now() - cachedData.timestamp < 300000) {
-          return res.json(cachedData.data);
-        }
-      }
-
-      const url = `https://loja.mueller.ind.br/rest/V1/orders?searchCriteria[filter_groups][0][filters][0][field]=${field}&searchCriteria[filter_groups][0][filters][0][value]=${value}&searchCriteria[pageSize]=50`;
-
-      const response = await axios.get(url, {
-        headers: {
-          Authorization: `Bearer ${TOKEN}`
-        }
-      });
-
-      if (!response.data.items || response.data.items.length === 0) {
-        return res.json([]);
-      }
-
-      const seisMesesAtras = new Date();
-      seisMesesAtras.setMonth(seisMesesAtras.getMonth() - 6);
-
-      pedidosCompletos = await Promise.all(
-        response.data.items
-          .filter(p => new Date(p.created_at) >= seisMesesAtras)
-          .map(async (p) => {
-            return await processarPedidoCompleto(p);
-          })
-      );
-
-      cache.set(cacheKey, {
-        timestamp: Date.now(),
-        data: pedidosCompletos
-      });
-    }
-    
-    // CASO 2: Busca por Número da NF (número interno)
-    else if (nf) {
-      const notaFiscal = await buscarNotaFiscalPorNumero(nf);
-      
-      if (!notaFiscal) {
-        return res.json([]);
-      }
-      
-      const orderId = notaFiscal.order_id;
-      
-      const url = `https://loja.mueller.ind.br/rest/V1/orders/${orderId}`;
-      
-      try {
-        const response = await axios.get(url, {
-          headers: {
-            Authorization: `Bearer ${TOKEN}`
-          }
-        });
-        
-        const pedido = response.data;
-        const pedidoProcessado = await processarPedidoCompleto(pedido);
-        pedidosCompletos = [pedidoProcessado];
-        
-      } catch (error) {
-        console.error("Erro ao buscar pedido por ID:", error.message);
-        return res.json([]);
+    const cacheKey = `${field}:${value}`;
+    if (cache.has(cacheKey)) {
+      const cachedData = cache.get(cacheKey);
+      if (Date.now() - cachedData.timestamp < 300000) {
+        return res.json(cachedData.data);
       }
     }
+
+    const url = `https://loja.mueller.ind.br/rest/V1/orders?searchCriteria[filter_groups][0][filters][0][field]=${field}&searchCriteria[filter_groups][0][filters][0][value]=${value}&searchCriteria[pageSize]=50`;
+
+    const response = await axios.get(url, {
+      headers: {
+        Authorization: `Bearer ${TOKEN}`
+      }
+    });
+
+    if (!response.data.items || response.data.items.length === 0) {
+      return res.json([]);
+    }
+
+    const seisMesesAtras = new Date();
+    seisMesesAtras.setMonth(seisMesesAtras.getMonth() - 6);
+
+    const pedidosCompletos = await Promise.all(
+      response.data.items
+        .filter(p => new Date(p.created_at) >= seisMesesAtras)
+        .map(async (p) => {
+          return await processarPedidoCompleto(p);
+        })
+    );
+
+    cache.set(cacheKey, {
+      timestamp: Date.now(),
+      data: pedidosCompletos
+    });
 
     res.json(pedidosCompletos);
 
