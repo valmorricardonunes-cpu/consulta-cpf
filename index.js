@@ -13,34 +13,80 @@ const cache = new Map();
 
 // ==================== FUNÇÕES UTILITÁRIAS ====================
 
-// Função para extrair número real da NF da chave de acesso
-function extrairNumeroNFdaChave(chaveAcesso) {
+// Função para extrair informações detalhadas da chave NF-e
+function extrairInformacoesChaveNF(chaveAcesso) {
   if (!chaveAcesso || chaveAcesso.length !== 44) {
     return null;
   }
   
   try {
-    // A chave de acesso tem 44 dígitos:
-    // Posições 25-34 contêm o número da NF (9 dígitos)
+    // Extrair todas as informações da chave
+    const uf = chaveAcesso.substring(0, 2);
+    const ano = chaveAcesso.substring(2, 4);
+    const mes = chaveAcesso.substring(4, 6);
+    const cnpj = chaveAcesso.substring(6, 20);
+    const modelo = chaveAcesso.substring(20, 22);
+    const serie = chaveAcesso.substring(22, 25);
     const numeroNFcompleto = chaveAcesso.substring(25, 34);
+    const tipoEmissao = chaveAcesso.substring(34, 35);
+    const codigoNumerico = chaveAcesso.substring(35, 43);
+    const dv = chaveAcesso.substring(43, 44);
     
-    // Remove zeros à esquerda
+    // Número da NF sem zeros à esquerda
     const numeroNF = parseInt(numeroNFcompleto).toString();
     
-    // Extrai também a série (posições 22-25)
-    const serie = chaveAcesso.substring(22, 25);
+    // Formatar CNPJ
+    const cnpjFormatado = cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, "$1.$2.$3/$4-$5");
+    
+    // Mapear UF
+    const ufMap = {
+      '42': 'SC - Santa Catarina',
+      '35': 'SP - São Paulo',
+      '33': 'RJ - Rio de Janeiro',
+      '41': 'PR - Paraná',
+      '43': 'RS - Rio Grande do Sul',
+      '31': 'MG - Minas Gerais'
+    };
     
     return {
       numero: numeroNF,
-      serie: serie,
       numero_completo: numeroNFcompleto,
+      numero_formatado: numeroNFcompleto.replace(/(\d{3})(\d{3})(\d{3})/, '$1.$2.$3'),
+      serie: serie,
+      formato: `${serie}/${numeroNF}`,
       chave_acesso: chaveAcesso,
-      formato: `${serie}/${numeroNF}`
+      uf: uf,
+      uf_completo: ufMap[uf] || `UF ${uf}`,
+      ano: `20${ano}`,
+      mes: mes,
+      ano_mes: `20${ano}/${mes}`,
+      cnpj: cnpj,
+      cnpj_formatado: cnpjFormatado,
+      modelo: modelo,
+      modelo_descricao: modelo === '55' ? 'NF-e' : modelo === '65' ? 'NFC-e' : `Modelo ${modelo}`,
+      tipo_emissao: tipoEmissao,
+      codigo_numerico: codigoNumerico,
+      dv: dv
     };
   } catch (error) {
-    console.error("Erro ao extrair número da NF:", error);
+    console.error("Erro ao extrair informações da chave:", error);
     return null;
   }
+}
+
+// Função simplificada para extrair apenas número da NF
+function extrairNumeroNFdaChave(chaveAcesso) {
+  const info = extrairInformacoesChaveNF(chaveAcesso);
+  if (!info) return null;
+  
+  return {
+    numero: info.numero,
+    serie: info.serie,
+    numero_completo: info.numero_completo,
+    chave_acesso: info.chave_acesso,
+    formato: info.formato,
+    numero_formatado: info.numero_formatado
+  };
 }
 
 // Função para formatar número da NF no padrão brasileiro
@@ -48,14 +94,12 @@ function formatarNumeroNF(numero) {
   if (!numero) return "";
   
   const numStr = numero.toString().padStart(9, '0');
-  
-  // Formato: 000.000.000
   return numStr.replace(/(\d{3})(\d{3})(\d{3})/, '$1.$2.$3');
 }
 
 // ==================== FUNÇÕES API MAGENTO ====================
 
-// Função para buscar notas fiscais de um pedido
+// Função ATUALIZADA para buscar notas fiscais - USA O RASTREAMENTO COMO CHAVE!
 async function buscarNotaFiscal(orderId) {
   try {
     const url = `https://loja.mueller.ind.br/rest/V1/invoices?searchCriteria[filter_groups][0][filters][0][field]=order_id&searchCriteria[filter_groups][0][filters][0][value]=${orderId}`;
@@ -67,41 +111,51 @@ async function buscarNotaFiscal(orderId) {
     if (response.data.items && response.data.items.length > 0) {
       const invoice = response.data.items[0];
       
-      // Verificar se há chave de acesso na nota
+      // NÚMERO INTERNO DO SISTEMA
+      const numeroInterno = invoice.increment_id;
+      
+      // PRIMEIRO: Buscar o rastreamento para pegar a CHAVE
+      const rastreamento = await buscarRastreamento(orderId);
+      
       let chaveAcesso = null;
       let numeroNFReal = null;
       
-      // Tentar encontrar a chave em diferentes lugares
-      if (invoice.extension_attributes) {
-        // Tentar no extension_attributes
-        const extAttrs = invoice.extension_attributes;
-        
-        if (extAttrs.nfe_key) {
-          chaveAcesso = extAttrs.nfe_key;
-        } else if (extAttrs.chave_acesso) {
-          chaveAcesso = extAttrs.chave_acesso;
-        } else if (extAttrs.nfeChave) {
-          chaveAcesso = extAttrs.nfeChave;
-        }
+      // SEÇÃO CRÍTICA: A chave está no código de rastreamento!
+      if (rastreamento && rastreamento.numero_rastreamento && rastreamento.numero_rastreamento.length === 44) {
+        // O "código de rastreamento" é na verdade a CHAVE DA NF!
+        chaveAcesso = rastreamento.numero_rastreamento;
+        numeroNFReal = extrairNumeroNFdaChave(chaveAcesso);
       }
       
-      // Extrair número real da NF da chave
-      if (chaveAcesso) {
-        numeroNFReal = extrairNumeroNFdaChave(chaveAcesso);
+      // Se não encontrou no rastreamento, tenta na invoice
+      if (!chaveAcesso && invoice.extension_attributes) {
+        const extAttrs = invoice.extension_attributes;
+        if (extAttrs.nfe_key) chaveAcesso = extAttrs.nfe_key;
+        else if (extAttrs.chave_acesso) chaveAcesso = extAttrs.chave_acesso;
+        else if (extAttrs.nfeChave) chaveAcesso = extAttrs.nfeChave;
+        
+        if (chaveAcesso) {
+          numeroNFReal = extrairNumeroNFdaChave(chaveAcesso);
+        }
       }
       
       return {
         // Número interno do sistema (invoice)
-        numero_interno: invoice.increment_id,
-        // Número real da NF (extraído da chave)
+        numero_interno: numeroInterno,
+        // Número real da NF (extraído da chave no rastreamento)
         numero_real: numeroNFReal ? numeroNFReal.numero : null,
         serie: numeroNFReal ? numeroNFReal.serie : null,
         formato_completo: numeroNFReal ? numeroNFReal.formato : null,
+        numero_formatado: numeroNFReal ? numeroNFReal.numero_formatado : null,
         chave_acesso: chaveAcesso,
         emitida_em: invoice.created_at,
-        // Campos adicionais
-        modelo: chaveAcesso ? chaveAcesso.substring(20, 22) : null,
-        cnpj_emitente: chaveAcesso ? chaveAcesso.substring(6, 20) : null
+        // Informações adicionais se tivermos a chave
+        ...(chaveAcesso ? {
+          modelo: chaveAcesso.substring(20, 22),
+          cnpj_emitente: chaveAcesso.substring(6, 20),
+          uf: chaveAcesso.substring(0, 2),
+          ano_mes: chaveAcesso.substring(2, 6)
+        } : {})
       };
     }
     return null;
@@ -143,7 +197,7 @@ async function buscarRastreamento(orderId) {
   }
 }
 
-// Função para buscar nota fiscal por número
+// Função para buscar nota fiscal por número interno
 async function buscarNotaFiscalPorNumero(numeroNF) {
   try {
     const url = `https://loja.mueller.ind.br/rest/V1/invoices?searchCriteria[filter_groups][0][filters][0][field]=increment_id&searchCriteria[filter_groups][0][filters][0][value]=${numeroNF}`;
@@ -364,6 +418,21 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             padding: 8px;
             border-radius: 4px;
             word-break: break-all;
+            border: 1px solid #dee2e6;
+        }
+        .nf-real {
+            background-color: #d4edda;
+            border-left: 4px solid #28a745;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+        .nf-interna {
+            background-color: #f8f9fa;
+            border-left: 4px solid #6c757d;
+            padding: 8px;
+            border-radius: 4px;
+            font-size: 0.9rem;
         }
     </style>
 </head>
@@ -435,11 +504,41 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // Função para formatar número da NF
-        function formatarNumeroNF(numero) {
-            if (!numero) return "";
-            const numStr = numero.toString().padStart(9, '0');
-            return numStr.replace(/(\\d{3})(\\d{3})(\\d{3})/, '$1.$2.$3');
+        // Função para extrair informações da chave NF-e (frontend)
+        function extrairInformacoesChaveNF(chave) {
+            if (!chave || chave.length !== 44) return null;
+            
+            try {
+                const uf = chave.substring(0, 2);
+                const ano = chave.substring(2, 4);
+                const mes = chave.substring(4, 6);
+                const modelo = chave.substring(20, 22);
+                const serie = chave.substring(22, 25);
+                const numeroNFcompleto = chave.substring(25, 34);
+                const numeroNF = parseInt(numeroNFcompleto).toString();
+                
+                const ufMap = {
+                    '42': 'SC - Santa Catarina',
+                    '35': 'SP - São Paulo',
+                    '33': 'RJ - Rio de Janeiro',
+                    '41': 'PR - Paraná',
+                    '43': 'RS - Rio Grande do Sul'
+                };
+                
+                return {
+                    numero: numeroNF,
+                    numero_completo: numeroNFcompleto,
+                    numero_formatado: numeroNFcompleto.replace(/(\\d{3})(\\d{3})(\\d{3})/, '$1.$2.$3'),
+                    serie: serie,
+                    formato: serie + '/' + numeroNF,
+                    chave_acesso: chave,
+                    uf_completo: ufMap[uf] || 'UF ' + uf,
+                    ano_mes: '20' + ano + '/' + mes,
+                    modelo_descricao: modelo === '55' ? 'NF-e' : 'Modelo ' + modelo
+                };
+            } catch (error) {
+                return null;
+            }
         }
         
         // Função para formatar chave de acesso
@@ -635,46 +734,67 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             });
             html += '</div>';
             
-            // Nota Fiscal ATUALIZADA
+            // NOTA FISCAL - VERSÃO SUPER MELHORADA
             if (pedido.nf) {
-                html += '<div class="info-box"><h6><i class="bi bi-receipt"></i> Nota Fiscal</h6>';
+                const nfInfo = pedido.nf.chave_acesso ? extrairInformacoesChaveNF(pedido.nf.chave_acesso) : null;
                 
-                // Mostra número interno do sistema
-                html += '<p class="mb-1"><strong>Documento Interno:</strong> ' + pedido.nf.numero_interno + '</p>';
+                html += '<div class="info-box">' +
+                        '<h6><i class="bi bi-receipt"></i> Nota Fiscal Eletrônica</h6>';
                 
-                // Mostra número real da NF (se disponível)
-                if (pedido.nf.numero_real) {
-                    html += '<p class="mb-1"><strong>NF-e:</strong> ' + 
-                            (pedido.nf.formato_completo || pedido.nf.numero_real) + '</p>';
+                // 1. NÚMERO REAL DA NF (extraído da chave) - DESTAQUE
+                if (nfInfo) {
+                    html += '<div class="nf-real">' +
+                            '<h5 class="mb-1"><strong>NF-e Real: ' + nfInfo.formato + '</strong></h5>' +
+                            '<p class="mb-0">Número: <strong>' + nfInfo.numero_formatado + '</strong> (' + nfInfo.numero + ')</p>' +
+                            '</div>';
                     
-                    // Mostra formato completo (000.000.000)
-                    if (pedido.numero_nf_formatado) {
-                        html += '<p class="mb-1"><strong>Formato:</strong> ' + pedido.numero_nf_formatado + '</p>';
-                    }
+                    // 2. INFORMAÇÕES DA CHAVE
+                    html += '<div class="mb-3">' +
+                            '<strong>Informações da Chave:</strong><br>' +
+                            '<small>' + nfInfo.uf_completo + ' | Emissão: ' + nfInfo.ano_mes + ' | ' + nfInfo.modelo_descricao + '</small>' +
+                            '</div>';
+                    
+                    // 3. CHAVE FORMATADA
+                    html += '<div class="mb-3">' +
+                            '<strong>Chave de Acesso (44 dígitos):</strong>' +
+                            '<div class="chave-nfe mt-1">' + formatarChaveAcesso(nfInfo.chave_acesso) + '</div>' +
+                            '<button class="btn btn-sm btn-outline-primary copy-btn mt-1 me-2" ' +
+                            'onclick="copyToClipboard(\\'' + nfInfo.chave_acesso + '\\')" ' +
+                            'title="Copiar chave completa">' +
+                            '<i class="bi bi-clipboard"></i> Copiar Chave</button>' +
+                            
+                            '<button class="btn btn-sm btn-outline-success copy-btn mt-1" ' +
+                            'onclick="copyToClipboard(\\'' + nfInfo.numero + '\\')" ' +
+                            'title="Copiar apenas o número da NF">' +
+                            '<i class="bi bi-clipboard-check"></i> Copiar Número NF</button>' +
+                            '</div>';
+                    
+                    // 4. LINKS PARA CONSULTA
+                    html += '<div class="d-grid gap-2">' +
+                            '<a href="https://www.nfe.fazenda.gov.br/portal/consultaRecaptcha.aspx?tipoConsulta=resumo&tipoConteudo=Gb3PasosJ2k=" ' +
+                            'target="_blank" class="btn btn-primary">' +
+                            '<i class="bi bi-search"></i> Consultar NF-e no Portal da Fazenda</a>' +
+                            
+                            '<a href="https://www.sefaz.rs.gov.br/NFE/NFE-NFC.aspx?p=' + pedido.nf.chave_acesso + '&t=1" ' +
+                            'target="_blank" class="btn btn-outline-primary">' +
+                            '<i class="bi bi-qr-code"></i> Ver DANFE Online</a>' +
+                            '</div>';
                 }
                 
-                // Mostra chave de acesso (se disponível)
-                if (pedido.nf.chave_acesso) {
-                    html += '<div class="mb-2"><strong>Chave de Acesso:</strong>' +
-                            '<div class="chave-nfe mt-1">' + formatarChaveAcesso(pedido.nf.chave_acesso) + '</div>' +
-                            '<button class="btn btn-sm btn-outline-secondary copy-btn mt-1" ' +
-                            'onclick="copyToClipboard(\\'' + pedido.nf.chave_acesso + '\\')" ' +
-                            'title="Copiar chave de acesso">' +
-                            '<i class="bi bi-clipboard"></i> Copiar Chave</button></div>';
-                    
-                    // Link para consultar NF-e
-                    html += '<a href="https://www.nfe.fazenda.gov.br/portal/consulta.aspx?tipoConsulta=completa&tipoConteudo=XbSeqxE8pl8=" ' +
-                            'target="_blank" class="btn btn-sm btn-primary">' +
-                            '<i class="bi bi-box-arrow-up-right"></i> Consultar NF-e</a>';
-                }
+                // 5. NÚMERO INTERNO DO SISTEMA (para referência)
+                html += '<div class="nf-interna mt-3">' +
+                        '<i class="bi bi-info-circle"></i> ' +
+                        '<strong>Documento Interno do Sistema:</strong> ' + pedido.nf.numero_interno + ' | ' +
+                        '<strong>Emitida em:</strong> ' + formatDate(pedido.nf.emitida_em) +
+                        '</div>';
                 
-                html += '<p class="mb-0 mt-2"><strong>Emitida em:</strong> ' + formatDate(pedido.nf.emitida_em) + '</p>';
                 html += '</div>';
             }
             
             // Rastreamento
             if (pedido.rastreamento) {
-                html += '<div class="info-box"><h6><i class="bi bi-truck"></i> Rastreamento</h6>' +
+                html += '<div class="info-box">' +
+                        '<h6><i class="bi bi-truck"></i> Rastreamento</h6>' +
                         '<p class="mb-1"><strong>Código:</strong> ' + 
                         '<span id="track-' + pedido.numero_pedido + '">' + pedido.rastreamento.numero_rastreamento + '</span>' +
                         '<button class="btn btn-sm btn-outline-secondary copy-btn ms-2" onclick="copyToClipboard(\\'' + pedido.rastreamento.numero_rastreamento + '\\')" title="Copiar código"><i class="bi bi-clipboard"></i></button></p>' +
@@ -770,7 +890,7 @@ app.get("/api/pedidos", async (req, res) => {
       });
     }
     
-    // CASO 2: Busca por Número da NF
+    // CASO 2: Busca por Número da NF (número interno)
     else if (nf) {
       const notaFiscal = await buscarNotaFiscalPorNumero(nf);
       
