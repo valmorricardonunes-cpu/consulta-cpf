@@ -8,6 +8,10 @@ app.use(express.json());
 
 const TOKEN = process.env.MUELLER_TOKEN;
 
+app.get("/", (req, res) => {
+  res.send("API consulta de pedidos ativa");
+});
+
 app.get("/pedidos", async (req, res) => {
   try {
     const { cpf, pedido } = req.query;
@@ -23,7 +27,7 @@ app.get("/pedidos", async (req, res) => {
 
     const response = await axios.get(url, {
       headers: {
-        Authorization: `Bearer ${process.env.MUELLER_TOKEN}`
+        Authorization: `Bearer ${TOKEN}`
       }
     });
 
@@ -32,22 +36,35 @@ app.get("/pedidos", async (req, res) => {
 
     const pedidosFiltrados = response.data.items
       .filter(p => new Date(p.created_at) >= seisMesesAtras)
-      .map(pedido => ({
-        numero_pedido: pedido.increment_id,
-        data_pedido: pedido.created_at,
-        consumidor: pedido.customer_firstname + " " + pedido.customer_lastname,
-        endereco_entrega: pedido.extension_attributes?.shipping_assignments?.[0]?.shipping?.address || null,
-        produtos: pedido.items.map(item => ({
-          nome: item.name,
-          quantidade: item.qty_ordered
+      .map(p => ({
+        numero_pedido: p.increment_id,
+        data_pedido: p.created_at,
+        consumidor: `${p.customer_firstname} ${p.customer_lastname}`,
+        endereco_entrega: p.billing_address
+          ? {
+              rua: p.billing_address.street?.join(", "),
+              cidade: p.billing_address.city,
+              estado: p.billing_address.region,
+              cep: p.billing_address.postcode
+            }
+          : null,
+        produtos: p.items.map(i => ({
+          nome: i.name,
+          quantidade: i.qty_ordered
         })),
-        nf: pedido.extension_attributes?.invoice_id || null,
-        rastreamento: pedido.extension_attributes?.shipping_assignments?.[0]?.shipping?.tracks?.[0]?.track_url || null
+        nf: null,
+        rastreamento: null
       }));
 
     res.json(pedidosFiltrados);
 
   } catch (error) {
+    console.error(error.message);
     res.status(500).json({ erro: "Erro ao consultar pedidos" });
   }
+});
+
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => {
+  console.log("Servidor rodando na porta", PORT);
 });
