@@ -16,32 +16,38 @@ app.get("/pedidos", async (req, res) => {
       return res.status(400).json({ erro: "Informe CPF ou número do pedido" });
     }
 
-    let filtro = "";
+    const field = cpf ? "customer_taxvat" : "increment_id";
+    const value = cpf || pedido;
 
-    if (cpf) {
-      filtro = `customer_taxvat=${cpf}`;
-    }
-
-    if (pedido) {
-      filtro = `increment_id=${pedido}`;
-    }
-
-    const url = `https://loja.mueller.ind.br/rest/V1/orders?searchCriteria[filter_groups][0][filters][0][field]=${filtro.split("=")[0]}&searchCriteria[filter_groups][0][filters][0][value]=${filtro.split("=")[1]}`;
+    const url = `https://loja.mueller.ind.br/rest/V1/orders?searchCriteria[filter_groups][0][filters][0][field]=${field}&searchCriteria[filter_groups][0][filters][0][value]=${value}`;
 
     const response = await axios.get(url, {
       headers: {
-        Authorization: `Bearer ${TOKEN}`
+        Authorization: `Bearer ${process.env.MUELLER_TOKEN}`
       }
     });
 
-    res.json(response.data);
+    const seisMesesAtras = new Date();
+    seisMesesAtras.setMonth(seisMesesAtras.getMonth() - 6);
+
+    const pedidosFiltrados = response.data.items
+      .filter(p => new Date(p.created_at) >= seisMesesAtras)
+      .map(pedido => ({
+        numero_pedido: pedido.increment_id,
+        data_pedido: pedido.created_at,
+        consumidor: pedido.customer_firstname + " " + pedido.customer_lastname,
+        endereco_entrega: pedido.extension_attributes?.shipping_assignments?.[0]?.shipping?.address || null,
+        produtos: pedido.items.map(item => ({
+          nome: item.name,
+          quantidade: item.qty_ordered
+        })),
+        nf: pedido.extension_attributes?.invoice_id || null,
+        rastreamento: pedido.extension_attributes?.shipping_assignments?.[0]?.shipping?.tracks?.[0]?.track_url || null
+      }));
+
+    res.json(pedidosFiltrados);
 
   } catch (error) {
     res.status(500).json({ erro: "Erro ao consultar pedidos" });
   }
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log("Servidor rodando na porta", PORT);
 });
