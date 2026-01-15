@@ -11,7 +11,243 @@ const TOKEN = process.env.MUELLER_TOKEN;
 // Cache simples
 const cache = new Map();
 
-// HTML template para a página principal
+// ==================== FUNÇÕES UTILITÁRIAS ====================
+
+// Função para extrair número real da NF da chave de acesso
+function extrairNumeroNFdaChave(chaveAcesso) {
+  if (!chaveAcesso || chaveAcesso.length !== 44) {
+    return null;
+  }
+  
+  try {
+    // A chave de acesso tem 44 dígitos:
+    // Posições 25-34 contêm o número da NF (9 dígitos)
+    const numeroNFcompleto = chaveAcesso.substring(25, 34);
+    
+    // Remove zeros à esquerda
+    const numeroNF = parseInt(numeroNFcompleto).toString();
+    
+    // Extrai também a série (posições 22-25)
+    const serie = chaveAcesso.substring(22, 25);
+    
+    return {
+      numero: numeroNF,
+      serie: serie,
+      numero_completo: numeroNFcompleto,
+      chave_acesso: chaveAcesso,
+      formato: `${serie}/${numeroNF}`
+    };
+  } catch (error) {
+    console.error("Erro ao extrair número da NF:", error);
+    return null;
+  }
+}
+
+// Função para formatar número da NF no padrão brasileiro
+function formatarNumeroNF(numero) {
+  if (!numero) return "";
+  
+  const numStr = numero.toString().padStart(9, '0');
+  
+  // Formato: 000.000.000
+  return numStr.replace(/(\d{3})(\d{3})(\d{3})/, '$1.$2.$3');
+}
+
+// ==================== FUNÇÕES API MAGENTO ====================
+
+// Função para buscar notas fiscais de um pedido
+async function buscarNotaFiscal(orderId) {
+  try {
+    const url = `https://loja.mueller.ind.br/rest/V1/invoices?searchCriteria[filter_groups][0][filters][0][field]=order_id&searchCriteria[filter_groups][0][filters][0][value]=${orderId}`;
+    
+    const response = await axios.get(url, {
+      headers: { Authorization: `Bearer ${TOKEN}` }
+    });
+
+    if (response.data.items && response.data.items.length > 0) {
+      const invoice = response.data.items[0];
+      
+      // Verificar se há chave de acesso na nota
+      let chaveAcesso = null;
+      let numeroNFReal = null;
+      
+      // Tentar encontrar a chave em diferentes lugares
+      if (invoice.extension_attributes) {
+        // Tentar no extension_attributes
+        const extAttrs = invoice.extension_attributes;
+        
+        if (extAttrs.nfe_key) {
+          chaveAcesso = extAttrs.nfe_key;
+        } else if (extAttrs.chave_acesso) {
+          chaveAcesso = extAttrs.chave_acesso;
+        } else if (extAttrs.nfeChave) {
+          chaveAcesso = extAttrs.nfeChave;
+        }
+      }
+      
+      // Extrair número real da NF da chave
+      if (chaveAcesso) {
+        numeroNFReal = extrairNumeroNFdaChave(chaveAcesso);
+      }
+      
+      return {
+        // Número interno do sistema (invoice)
+        numero_interno: invoice.increment_id,
+        // Número real da NF (extraído da chave)
+        numero_real: numeroNFReal ? numeroNFReal.numero : null,
+        serie: numeroNFReal ? numeroNFReal.serie : null,
+        formato_completo: numeroNFReal ? numeroNFReal.formato : null,
+        chave_acesso: chaveAcesso,
+        emitida_em: invoice.created_at,
+        // Campos adicionais
+        modelo: chaveAcesso ? chaveAcesso.substring(20, 22) : null,
+        cnpj_emitente: chaveAcesso ? chaveAcesso.substring(6, 20) : null
+      };
+    }
+    return null;
+  } catch (error) {
+    console.error("Erro ao buscar nota fiscal:", error.message);
+    return null;
+  }
+}
+
+// Função para buscar rastreamento
+async function buscarRastreamento(orderId) {
+  try {
+    const url = `https://loja.mueller.ind.br/rest/V1/shipments?searchCriteria[filter_groups][0][filters][0][field]=order_id&searchCriteria[filter_groups][0][filters][0][value]=${orderId}`;
+    
+    const response = await axios.get(url, {
+      headers: { Authorization: `Bearer ${TOKEN}` }
+    });
+
+    if (response.data.items && response.data.items.length > 0) {
+      const shipment = response.data.items[0];
+      
+      if (shipment.tracks && shipment.tracks.length > 0) {
+        return {
+          numero_rastreamento: shipment.tracks[0].track_number,
+          transportadora: shipment.tracks[0].title || shipment.tracks[0].carrier_code,
+          link_rastreamento: shipment.tracks[0].url || null
+        };
+      }
+      
+      return {
+        numero_envio: shipment.increment_id,
+        transportadora: shipment.shipping_description
+      };
+    }
+    return null;
+  } catch (error) {
+    console.error("Erro ao buscar rastreamento:", error.message);
+    return null;
+  }
+}
+
+// Função para buscar nota fiscal por número
+async function buscarNotaFiscalPorNumero(numeroNF) {
+  try {
+    const url = `https://loja.mueller.ind.br/rest/V1/invoices?searchCriteria[filter_groups][0][filters][0][field]=increment_id&searchCriteria[filter_groups][0][filters][0][value]=${numeroNF}`;
+    
+    const response = await axios.get(url, {
+      headers: { Authorization: `Bearer ${TOKEN}` }
+    });
+
+    if (response.data.items && response.data.items.length > 0) {
+      const invoice = response.data.items[0];
+      
+      let chaveAcesso = null;
+      let numeroNFReal = null;
+      
+      if (invoice.extension_attributes) {
+        const extAttrs = invoice.extension_attributes;
+        if (extAttrs.nfe_key) chaveAcesso = extAttrs.nfe_key;
+        else if (extAttrs.chave_acesso) chaveAcesso = extAttrs.chave_acesso;
+        else if (extAttrs.nfeChave) chaveAcesso = extAttrs.nfeChave;
+      }
+      
+      if (chaveAcesso) {
+        numeroNFReal = extrairNumeroNFdaChave(chaveAcesso);
+      }
+      
+      return {
+        numero_interno: invoice.increment_id,
+        numero_real: numeroNFReal ? numeroNFReal.numero : null,
+        serie: numeroNFReal ? numeroNFReal.serie : null,
+        formato_completo: numeroNFReal ? numeroNFReal.formato : null,
+        chave_acesso: chaveAcesso,
+        order_id: invoice.order_id,
+        emitida_em: invoice.created_at
+      };
+    }
+    return null;
+  } catch (error) {
+    console.error("Erro ao buscar nota fiscal por número:", error.message);
+    return null;
+  }
+}
+
+// Função para processar um pedido completo
+async function processarPedidoCompleto(p) {
+  const [notaFiscal, rastreamento] = await Promise.all([
+    buscarNotaFiscal(p.entity_id),
+    buscarRastreamento(p.entity_id)
+  ]);
+
+  let enderecoFormatado = null;
+  if (p.extension_attributes && p.extension_attributes.shipping_assignments) {
+    const shipping = p.extension_attributes.shipping_assignments[0]?.shipping?.address;
+    if (shipping) {
+      enderecoFormatado = {
+        rua: shipping.street ? (Array.isArray(shipping.street) ? shipping.street.join(", ") : shipping.street) : "",
+        numero: shipping.street_number || "",
+        complemento: shipping.complement || "",
+        bairro: shipping.neighborhood || "",
+        cidade: shipping.city || "",
+        estado: shipping.region || "",
+        cep: shipping.postcode || "",
+        telefone: shipping.telephone || ""
+      };
+    }
+  }
+
+  if (!enderecoFormatado && p.billing_address) {
+    enderecoFormatado = {
+      rua: p.billing_address.street ? (Array.isArray(p.billing_address.street) ? p.billing_address.street.join(", ") : p.billing_address.street) : "",
+      cidade: p.billing_address.city || "",
+      estado: p.billing_address.region || "",
+      cep: p.billing_address.postcode || "",
+      telefone: p.billing_address.telephone || ""
+    };
+  }
+
+  return {
+    numero_pedido: p.increment_id,
+    data_pedido: p.created_at,
+    status: p.status,
+    consumidor: `${p.customer_firstname || ""} ${p.customer_lastname || ""}`.trim(),
+    cpf: p.customer_taxvat || "",
+    email: p.customer_email || "",
+    telefone: p.billing_address?.telephone || "",
+    endereco_entrega: enderecoFormatado,
+    produtos: p.items.map(i => ({
+      nome: i.name,
+      sku: i.sku,
+      quantidade: i.qty_ordered,
+      preco_unitario: i.price,
+      total: i.row_total
+    })),
+    valor_total: p.grand_total,
+    forma_pagamento: p.payment?.method || "",
+    nf: notaFiscal,
+    rastreamento: rastreamento,
+    numero_nf_formatado: notaFiscal && notaFiscal.numero_real 
+      ? formatarNumeroNF(notaFiscal.numero_real)
+      : (notaFiscal ? notaFiscal.numero_interno : null),
+    link_pedido: `https://loja.mueller.ind.br/admin/sales/order/view/order_id/${p.entity_id}/`
+  };
+}
+
+// ==================== HTML TEMPLATE ====================
 const HTML_TEMPLATE = `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -121,35 +357,50 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
         .copy-btn:hover {
             transform: scale(1.1);
         }
+        .chave-nfe {
+            font-family: monospace;
+            font-size: 0.8rem;
+            background: #f8f9fa;
+            padding: 8px;
+            border-radius: 4px;
+            word-break: break-all;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header text-center">
-            <h1><i class="bi bi-search"></i> Consulta de Pedidos</h1>
-            <p class="lead">Sistema de consulta de pedidos por CPF ou número do pedido</p>
+            <h1><i class="bi bi-search"></i> Consulta de Pedidos Mueller</h1>
+            <p class="lead">Sistema de consulta de pedidos por CPF, número do pedido ou NF</p>
         </div>
 
         <div class="search-form">
             <h4><i class="bi bi-search"></i> Buscar Pedidos</h4>
             <form id="searchForm">
                 <div class="row g-3">
-                    <div class="col-md-6">
+                    <div class="col-md-4">
                         <label for="cpf" class="form-label">CPF (somente números)</label>
                         <div class="input-group">
                             <span class="input-group-text"><i class="bi bi-person-badge"></i></span>
                             <input type="text" class="form-control" id="cpf" placeholder="Digite o CPF">
                         </div>
                     </div>
-                    <div class="col-md-6">
+                    <div class="col-md-4">
                         <label for="pedido" class="form-label">Número do Pedido</label>
                         <div class="input-group">
                             <span class="input-group-text"><i class="bi bi-receipt"></i></span>
-                            <input type="text" class="form-control" id="pedido" placeholder="Digite o número do pedido">
+                            <input type="text" class="form-control" id="pedido" placeholder="Ex: 1000662958">
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <label for="nf" class="form-label">Número da NF</label>
+                        <div class="input-group">
+                            <span class="input-group-text"><i class="bi bi-file-text"></i></span>
+                            <input type="text" class="form-control" id="nf" placeholder="Ex: 1000566780">
                         </div>
                     </div>
                     <div class="col-12">
-                        <div class="form-text mb-3">Informe o CPF OU o número do pedido</div>
+                        <div class="form-text mb-3">Informe APENAS UM: CPF OU número do pedido OU número da NF</div>
                         <button type="submit" class="btn btn-primary">
                             <i class="bi bi-search"></i> Buscar Pedidos
                         </button>
@@ -184,14 +435,35 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
+        // Função para formatar número da NF
+        function formatarNumeroNF(numero) {
+            if (!numero) return "";
+            const numStr = numero.toString().padStart(9, '0');
+            return numStr.replace(/(\\d{3})(\\d{3})(\\d{3})/, '$1.$2.$3');
+        }
+        
+        // Função para formatar chave de acesso
+        function formatarChaveAcesso(chave) {
+            if (!chave || chave.length !== 44) return chave;
+            return chave.match(/.{1,4}/g).join(' ');
+        }
+        
         document.getElementById('searchForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
             const cpf = document.getElementById('cpf').value.trim();
             const pedido = document.getElementById('pedido').value.trim();
+            const nf = document.getElementById('nf').value.trim();
             
-            if (!cpf && !pedido) {
-                showError('Informe o CPF ou o número do pedido');
+            const camposPreenchidos = [cpf, pedido, nf].filter(Boolean).length;
+            
+            if (camposPreenchidos === 0) {
+                showError('Informe o CPF, número do pedido ou número da NF');
+                return;
+            }
+            
+            if (camposPreenchidos > 1) {
+                showError('Informe apenas UM critério de busca por vez');
                 return;
             }
             
@@ -205,7 +477,11 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             document.getElementById('results').innerHTML = '';
             
             try {
-                const queryParam = cpf ? 'cpf=' + cpf : 'pedido=' + pedido;
+                let queryParam = '';
+                if (cpf) queryParam = 'cpf=' + cpf;
+                else if (pedido) queryParam = 'pedido=' + pedido;
+                else if (nf) queryParam = 'nf=' + nf;
+                
                 const response = await fetch('/api/pedidos?' + queryParam);
                 const data = await response.json();
                 
@@ -229,6 +505,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
         document.getElementById('clearBtn').addEventListener('click', function() {
             document.getElementById('cpf').value = '';
             document.getElementById('pedido').value = '';
+            document.getElementById('nf').value = '';
             document.getElementById('results').innerHTML = '';
             hideError();
         });
@@ -292,17 +569,20 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
         function displayResults(pedidos) {
             let html = '<div class="mb-4"><h4><i class="bi bi-list-check"></i> Resultados Encontrados: ' + pedidos.length + ' pedido(s)</h4></div>';
             
-            // Tabela resumida
             html += '<div class="table-responsive mb-4"><table class="table table-hover"><thead><tr><th>Pedido</th><th>Data</th><th>Status</th><th>Valor Total</th><th>Pagamento</th><th>NF</th><th>Ações</th></tr></thead><tbody>';
             
             pedidos.forEach(pedido => {
+                const nfDisplay = pedido.nf && pedido.nf.formato_completo 
+                    ? pedido.nf.formato_completo 
+                    : (pedido.nf ? pedido.nf.numero_interno : '—');
+                
                 html += '<tr>' +
                     '<td><strong>' + pedido.numero_pedido + '</strong></td>' +
                     '<td>' + formatDate(pedido.data_pedido) + '</td>' +
                     '<td>' + getStatusBadge(pedido.status) + '</td>' +
                     '<td><strong>' + formatCurrency(pedido.valor_total) + '</strong></td>' +
                     '<td>' + getPaymentBadge(pedido.forma_pagamento) + '</td>' +
-                    '<td>' + (pedido.nf ? pedido.nf.numero : '—') + '</td>' +
+                    '<td>' + nfDisplay + '</td>' +
                     '<td><button class="btn btn-sm btn-outline-primary" onclick="toggleDetails(\\'' + pedido.numero_pedido + '\\')" data-bs-toggle="collapse" data-bs-target="#details-' + pedido.numero_pedido + '"><i class="bi bi-chevron-down"></i> Detalhes</button></td>' +
                 '</tr>' +
                 '<tr>' +
@@ -355,11 +635,41 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             });
             html += '</div>';
             
-            // Nota Fiscal
+            // Nota Fiscal ATUALIZADA
             if (pedido.nf) {
-                html += '<div class="info-box"><h6><i class="bi bi-receipt"></i> Nota Fiscal</h6>' +
-                        '<p class="mb-1"><strong>Número:</strong> ' + pedido.nf.numero + '</p>' +
-                        '<p class="mb-0"><strong>Emitida em:</strong> ' + formatDate(pedido.nf.emitida_em) + '</p></div>';
+                html += '<div class="info-box"><h6><i class="bi bi-receipt"></i> Nota Fiscal</h6>';
+                
+                // Mostra número interno do sistema
+                html += '<p class="mb-1"><strong>Documento Interno:</strong> ' + pedido.nf.numero_interno + '</p>';
+                
+                // Mostra número real da NF (se disponível)
+                if (pedido.nf.numero_real) {
+                    html += '<p class="mb-1"><strong>NF-e:</strong> ' + 
+                            (pedido.nf.formato_completo || pedido.nf.numero_real) + '</p>';
+                    
+                    // Mostra formato completo (000.000.000)
+                    if (pedido.numero_nf_formatado) {
+                        html += '<p class="mb-1"><strong>Formato:</strong> ' + pedido.numero_nf_formatado + '</p>';
+                    }
+                }
+                
+                // Mostra chave de acesso (se disponível)
+                if (pedido.nf.chave_acesso) {
+                    html += '<div class="mb-2"><strong>Chave de Acesso:</strong>' +
+                            '<div class="chave-nfe mt-1">' + formatarChaveAcesso(pedido.nf.chave_acesso) + '</div>' +
+                            '<button class="btn btn-sm btn-outline-secondary copy-btn mt-1" ' +
+                            'onclick="copyToClipboard(\\'' + pedido.nf.chave_acesso + '\\')" ' +
+                            'title="Copiar chave de acesso">' +
+                            '<i class="bi bi-clipboard"></i> Copiar Chave</button></div>';
+                    
+                    // Link para consultar NF-e
+                    html += '<a href="https://www.nfe.fazenda.gov.br/portal/consulta.aspx?tipoConsulta=completa&tipoConteudo=XbSeqxE8pl8=" ' +
+                            'target="_blank" class="btn btn-sm btn-primary">' +
+                            '<i class="bi bi-box-arrow-up-right"></i> Consultar NF-e</a>';
+                }
+                
+                html += '<p class="mb-0 mt-2"><strong>Emitida em:</strong> ' + formatDate(pedido.nf.emitida_em) + '</p>';
+                html += '</div>';
             }
             
             // Rastreamento
@@ -367,7 +677,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
                 html += '<div class="info-box"><h6><i class="bi bi-truck"></i> Rastreamento</h6>' +
                         '<p class="mb-1"><strong>Código:</strong> ' + 
                         '<span id="track-' + pedido.numero_pedido + '">' + pedido.rastreamento.numero_rastreamento + '</span>' +
-                        '<button class="btn btn-sm btn-outline-secondary copy-btn" onclick="copyToClipboard(\\'' + pedido.rastreamento.numero_rastreamento + '\\')" title="Copiar código"><i class="bi bi-clipboard"></i></button></p>' +
+                        '<button class="btn btn-sm btn-outline-secondary copy-btn ms-2" onclick="copyToClipboard(\\'' + pedido.rastreamento.numero_rastreamento + '\\')" title="Copiar código"><i class="bi bi-clipboard"></i></button></p>' +
                         '<p class="mb-1"><strong>Transportadora:</strong> ' + pedido.rastreamento.transportadora + '</p>';
                 if (pedido.rastreamento.link_rastreamento) {
                     html += '<a href="' + pedido.rastreamento.link_rastreamento + '" target="_blank" class="btn btn-sm btn-primary"><i class="bi bi-box-arrow-up-right"></i> Acompanhar Entrega</a>';
@@ -399,66 +709,118 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
 </body>
 </html>`;
 
+// ==================== ROTAS DA API ====================
+
 app.get("/", (req, res) => {
   res.send(HTML_TEMPLATE);
 });
 
-// Função para buscar notas fiscais
-async function buscarNotaFiscal(orderId) {
+// Rota da API com suporte a CPF, Pedido e NF
+app.get("/api/pedidos", async (req, res) => {
   try {
-    const url = `https://loja.mueller.ind.br/rest/V1/invoices?searchCriteria[filter_groups][0][filters][0][field]=order_id&searchCriteria[filter_groups][0][filters][0][value]=${orderId}`;
-    
-    const response = await axios.get(url, {
-      headers: { Authorization: `Bearer ${TOKEN}` }
-    });
+    const { cpf, pedido, nf } = req.query;
 
-    if (response.data.items && response.data.items.length > 0) {
-      return {
-        numero: response.data.items[0].increment_id,
-        emitida_em: response.data.items[0].created_at
-      };
+    if (!cpf && !pedido && !nf) {
+      return res.status(400).json({ 
+        erro: "Informe CPF, número do pedido ou número da NF" 
+      });
     }
-    return null;
-  } catch (error) {
-    console.error("Erro ao buscar nota fiscal:", error.message);
-    return null;
-  }
-}
 
-// Função para buscar rastreamento
-async function buscarRastreamento(orderId) {
-  try {
-    const url = `https://loja.mueller.ind.br/rest/V1/shipments?searchCriteria[filter_groups][0][filters][0][field]=order_id&searchCriteria[filter_groups][0][filters][0][value]=${orderId}`;
+    let pedidosCompletos = [];
+
+    // CASO 1: Busca por CPF ou Pedido
+    if (cpf || pedido) {
+      const field = cpf ? "customer_taxvat" : "increment_id";
+      const value = cpf || pedido;
+
+      const cacheKey = `${field}:${value}`;
+      if (cache.has(cacheKey)) {
+        const cachedData = cache.get(cacheKey);
+        if (Date.now() - cachedData.timestamp < 300000) {
+          return res.json(cachedData.data);
+        }
+      }
+
+      const url = `https://loja.mueller.ind.br/rest/V1/orders?searchCriteria[filter_groups][0][filters][0][field]=${field}&searchCriteria[filter_groups][0][filters][0][value]=${value}&searchCriteria[pageSize]=50`;
+
+      const response = await axios.get(url, {
+        headers: {
+          Authorization: `Bearer ${TOKEN}`
+        }
+      });
+
+      if (!response.data.items || response.data.items.length === 0) {
+        return res.json([]);
+      }
+
+      const seisMesesAtras = new Date();
+      seisMesesAtras.setMonth(seisMesesAtras.getMonth() - 6);
+
+      pedidosCompletos = await Promise.all(
+        response.data.items
+          .filter(p => new Date(p.created_at) >= seisMesesAtras)
+          .map(async (p) => {
+            return await processarPedidoCompleto(p);
+          })
+      );
+
+      cache.set(cacheKey, {
+        timestamp: Date.now(),
+        data: pedidosCompletos
+      });
+    }
     
-    const response = await axios.get(url, {
-      headers: { Authorization: `Bearer ${TOKEN}` }
-    });
-
-    if (response.data.items && response.data.items.length > 0) {
-      const shipment = response.data.items[0];
+    // CASO 2: Busca por Número da NF
+    else if (nf) {
+      const notaFiscal = await buscarNotaFiscalPorNumero(nf);
       
-      if (shipment.tracks && shipment.tracks.length > 0) {
-        return {
-          numero_rastreamento: shipment.tracks[0].track_number,
-          transportadora: shipment.tracks[0].title || shipment.tracks[0].carrier_code,
-          link_rastreamento: shipment.tracks[0].url || null
-        };
+      if (!notaFiscal) {
+        return res.json([]);
       }
       
-      return {
-        numero_envio: shipment.increment_id,
-        transportadora: shipment.shipping_description
-      };
+      const orderId = notaFiscal.order_id;
+      
+      const url = `https://loja.mueller.ind.br/rest/V1/orders/${orderId}`;
+      
+      try {
+        const response = await axios.get(url, {
+          headers: {
+            Authorization: `Bearer ${TOKEN}`
+          }
+        });
+        
+        const pedido = response.data;
+        const pedidoProcessado = await processarPedidoCompleto(pedido);
+        pedidosCompletos = [pedidoProcessado];
+        
+      } catch (error) {
+        console.error("Erro ao buscar pedido por ID:", error.message);
+        return res.json([]);
+      }
     }
-    return null;
-  } catch (error) {
-    console.error("Erro ao buscar rastreamento:", error.message);
-    return null;
-  }
-}
 
-// Rota da API
-app.get("/api/pedidos", async (req, res) => {
+    res.json(pedidosCompletos);
+
+  } catch (error) {
+    console.error("Erro detalhado:", error.response?.data || error.message);
+    
+    if (error.response?.status === 401) {
+      return res.status(401).json({ erro: "Token de autenticação inválido" });
+    }
+    
+    if (error.response?.status === 404) {
+      return res.json([]);
+    }
+    
+    res.status(500).json({ 
+      erro: "Erro ao consultar pedidos",
+      detalhes: error.message 
+    });
+  }
+});
+
+// Rota para manter compatibilidade com versão anterior
+app.get("/pedidos", async (req, res) => {
   try {
     const { cpf, pedido } = req.query;
 
@@ -496,60 +858,7 @@ app.get("/api/pedidos", async (req, res) => {
       response.data.items
         .filter(p => new Date(p.created_at) >= seisMesesAtras)
         .map(async (p) => {
-          const [notaFiscal, rastreamento] = await Promise.all([
-            buscarNotaFiscal(p.entity_id),
-            buscarRastreamento(p.entity_id)
-          ]);
-
-          let enderecoFormatado = null;
-          if (p.extension_attributes && p.extension_attributes.shipping_assignments) {
-            const shipping = p.extension_attributes.shipping_assignments[0]?.shipping?.address;
-            if (shipping) {
-              enderecoFormatado = {
-                rua: shipping.street ? (Array.isArray(shipping.street) ? shipping.street.join(", ") : shipping.street) : "",
-                numero: shipping.street_number || "",
-                complemento: shipping.complement || "",
-                bairro: shipping.neighborhood || "",
-                cidade: shipping.city || "",
-                estado: shipping.region || "",
-                cep: shipping.postcode || "",
-                telefone: shipping.telephone || ""
-              };
-            }
-          }
-
-          if (!enderecoFormatado && p.billing_address) {
-            enderecoFormatado = {
-              rua: p.billing_address.street ? (Array.isArray(p.billing_address.street) ? p.billing_address.street.join(", ") : p.billing_address.street) : "",
-              cidade: p.billing_address.city || "",
-              estado: p.billing_address.region || "",
-              cep: p.billing_address.postcode || "",
-              telefone: p.billing_address.telephone || ""
-            };
-          }
-
-          return {
-            numero_pedido: p.increment_id,
-            data_pedido: p.created_at,
-            status: p.status,
-            consumidor: `${p.customer_firstname || ""} ${p.customer_lastname || ""}`.trim(),
-            cpf: p.customer_taxvat || "",
-            email: p.customer_email || "",
-            telefone: p.billing_address?.telephone || "",
-            endereco_entrega: enderecoFormatado,
-            produtos: p.items.map(i => ({
-              nome: i.name,
-              sku: i.sku,
-              quantidade: i.qty_ordered,
-              preco_unitario: i.price,
-              total: i.row_total
-            })),
-            valor_total: p.grand_total,
-            forma_pagamento: p.payment?.method || "",
-            nf: notaFiscal,
-            rastreamento: rastreamento,
-            link_pedido: `https://loja.mueller.ind.br/admin/sales/order/view/order_id/${p.entity_id}/`
-          };
+          return await processarPedidoCompleto(p);
         })
     );
 
@@ -578,24 +887,26 @@ app.get("/api/pedidos", async (req, res) => {
   }
 });
 
-// Endpoint para limpar cache
-app.delete("/api/cache", (req, res) => {
-  cache.clear();
-  res.json({ mensagem: "Cache limpo" });
-});
-
 // Rota de status
 app.get("/status", (req, res) => {
   res.json({
     status: "online",
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    memory: process.memoryUsage()
+    memory: process.memoryUsage(),
+    cache_size: cache.size
   });
+});
+
+// Endpoint para limpar cache
+app.delete("/api/cache", (req, res) => {
+  cache.clear();
+  res.json({ mensagem: "Cache limpo", cache_size: cache.size });
 });
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
   console.log(`🌐 Acesse: http://localhost:${PORT}`);
+  console.log(`🔧 Ambiente: ${process.env.NODE_ENV || 'desenvolvimento'}`);
 });
