@@ -194,7 +194,8 @@ async function processarPedidoCompleto(p) {
         data_pedido: p.created_at,
         status: p.status,
         consumidor: `${p.customer_firstname || ""} ${p.customer_lastname || ""}`.trim(),
-        cpf: p.customer_taxvat ? `***${p.customer_taxvat.substring(3, 9)}**` : "", // CPF MASCARADO!
+        cpf: p.customer_taxvat ? 
+    `${p.customer_taxvat.substring(0, 3)}.${p.customer_taxvat.substring(3, 6)}.${p.customer_taxvat.substring(6, 9)}-${p.customer_taxvat.substring(9, 11)}` : "",
         email: p.customer_email || "",
         telefone: p.billing_address?.telephone || "",
         endereco_entrega: enderecoFormatado,
