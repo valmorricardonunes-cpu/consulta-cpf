@@ -228,7 +228,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
     <style>
         body { background-color: #f8f9fa; padding: 20px; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 2rem; border-radius: 10px; margin-bottom: 2rem; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .header { background: linear-gradient(135deg, #682247 0%, #5a1d3d 100%); color: white; padding: 2rem; border-radius: 10px; margin-bottom: 2rem; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         .card { border: none; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.08); margin-bottom: 1.5rem; transition: transform 0.3s; }
         .card:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
         .status-badge { font-size: 0.8rem; padding: 5px 10px; border-radius: 20px; }
@@ -241,10 +241,10 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
         .badge-boleto { background-color: #d9534f; color: white; }
         .search-form { background: white; padding: 1.5rem; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.08); margin-bottom: 2rem; }
         .table-responsive { border-radius: 10px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.08); }
-        .table th { background-color: #667eea; color: white; border: none; }
+        .table th { background-color: #682247; color: white; border: none; }
         .table td { vertical-align: middle; }
-        .accordion-button:not(.collapsed) { background-color: rgba(102, 126, 234, 0.1); color: #667eea; }
-        .info-box { background: white; padding: 15px; border-radius: 8px; border-left: 4px solid #667eea; margin-bottom: 15px; }
+        .accordion-button:not(.collapsed) { background-color: rgba(104, 34, 71, 0.1); color: #682247; }
+        .info-box { background: white; padding: 15px; border-radius: 8px; border-left: 4px solid #682247; margin-bottom: 15px; }
         .copy-btn { cursor: pointer; transition: all 0.3s; }
         .copy-btn:hover { transform: scale(1.1); }
         .chave-nfe { font-family: monospace; font-size: 0.8rem; background: #f8f9fa; padding: 8px; border-radius: 4px; word-break: break-all; border: 1px solid #dee2e6; }
@@ -254,8 +254,13 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
 <body>
     <div class="container">
         <div class="header text-center">
-            <h1><i class="bi bi-search"></i> Consulta de Pedidos Mueller</h1>
-            <p class="lead">Sistema de consulta de pedidos por CPF ou número do pedido</p>
+    <!-- LOGO MUELLER -->
+    <img src="https://loja.mueller.ind.br/static/version1705596758/frontend/Mueller/pt_Br/images/logo.svg" 
+         alt="Mueller" 
+         height="50" 
+         class="mb-2">
+    
+    <h1><i class="bi bi-search"></i> Consulta de Pedidos Mueller</h1>
         </div>
 
         <div class="search-form">
