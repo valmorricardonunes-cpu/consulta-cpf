@@ -255,7 +255,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
     <div class="container">
         <div class="header text-center">
     <!-- LOGO MUELLER -->
-    <img src="https://loja.mueller.ind.br/static/version1705596758/frontend/Mueller/pt_Br/images/logo.svg" 
+    <img src="https://loja.mueller.ind.br/media/wysiwyg/image_4.png" 
          alt="Mueller" 
          height="50" 
          class="mb-2">
